@@ -1,0 +1,95 @@
+Beyond the Chatbot: Architecting an "Agentic AI Ready" Cloud
+
+Traditional multi-account architectures were built for humans and static applications. I want to explore how to re-architect for the era of autonomous AI agents.
+
+  
+
+The New Paradigm: When the Principal is a Machine
+
+As Solution Architects, we’ve spent the last decade perfecting the AWS Landing Zone. We’ve mastered AWS Control Tower, segregated duties with multi-account strategies, and locked down human access with Identity Centre. We have all built solid foundations for applications that servehumans. (Not AI Agents)
+
+But the ground is shifting. We are rapidly moving from passive Generative AI (chatbots that summarise documents) to proper Agentic AI.
+
+Agentic AI systems have evolved from just answering questions; they are given a goal, break it down into tasks, and autonomously execute those tasks by calling tools and APIs. They might query an Amazon RDS database, invoke a Lambda function to process data, and then call an external SaaS API via some kind of EventBridge to trigger an action.
+
+The challenge for the Solution Architect is this: How do you build a landing zone/Cloud environment where a machine identity needs broad access to your tools and data to be effective, without creating an existential security risk?
+
+A standard Control Tower setup isn't enough. An Agentic AI landing zone requires a fundamental rethink of identity, observability, and guardrails.
+
+My Blueprint: Four Pillars of an Agentic Landing Zone (Work in progress) 
+
+If you are evolving your current landing zone to support agentic workloads, these are the new architectural pillars you probably should prioritise.
+
+1. The Identity Shift: From RBAC to ABAC & Ephemeral Access
+
+In traditional landing zones, we define Role-Based Access Control (RBAC) for humans (e.g., "FinanceDeveloper"). Agents are harder to classify. An agent might need "Finance" access in the morning and "Logistics" access in the afternoon, depending on the prompt it’s handling.
+
+Giving an agent a broad IAM role is a security nightmare. The solution is dynamic, context-aware access.
+
+The "Best Way": Lean heavily into Attribute-Based Access Control (ABAC). Instead of defining hardcoded roles for every possible agent action, tag your resources (e.g., DynamoDB tables tagged DataClassification: Confidential, Department:Sales).
+Design your agent roles to only assume permissions based on matching attributes passed during the session context.
+The Tooling: Use IAM session tags when your orchestration layer (like ECS or Lambda invoking Bedrock) assumes the agent role. This ensures the agent only has permissions relevant to the specific task it is currently executing, rather than having long-term access.
+
+2. The "Tool Account" Pattern
+
+Where do your agents live? Do they sit in the application account? The data account?
+
+For autonomous agents, we need to centralise the "tools" they can use. A tool is an API wrapper—a Lambda function, an API Gateway endpoint, or a Step Functions workflow—that the LLM can invoke.
+
+The "Best Way": Introduce a dedicated "AI Tooling & Orchestration Account" within your Organisation.
+This account hosts the agent runtime (e.g., Amazon Bedrock Agents, or containers running LangChain/LlamaIndex on ECS Fargate).
+Crucially, this account contains the service interfaces (Lambdas) that act as proxies to resources in other accounts. The agent never talks directly to the production RDS DB in the Finance account; it talks to a governed Lambda tool in the Tooling account, which then assumes a cross-account role to perform a specific, limited query.
+This might be a tough sell to your CISO but its worth having the fight.
+
+3. Observability: Tracing the "Chain of Thought"
+
+When a human developer makes a mistake, we check CloudTrail and application logs. When an autonomous agent makes a mistake, it’s much harder to debug. Did it hallucinate the parameters? Did it call the wrong tool? Did the tool fail silently?
+
+Traditional logging isn't enough; you need execution tracing for non-deterministic workflows. (Yes, we have invented another new term to learn)
+
+The "Best Way": Implement distributed tracing that connects the prompt to the infrastructure action.
+Utilise AWS X-Ray (or OpenTelemetry) instrumented deeply into your tool Lambda functions. You must be able to correlate a specific Bedrock invocation ID with the subsequent downstream API calls the agent made.
+Centralise logs to an observability account using CloudWatch Logs and OpenSearch Service, specifically indexing the "reasoning trace" (the agent's internal monologue about why it is choosing a tool).
+
+4. Guardrails as Code (The Circuit Breakers)
+
+Agents can get stuck in loops. They can hallucinate expensive API calls. In a pay-as-you-go environment, an uncontrolled agent is a financial and operational risk. The pay-as-you-go model may end up being the costliest part of your infrastructure.
+
+Your Cloud environment needs infrastructure-level circuit breakers that exist outside the AI model itself.
+
+The "Best Way": Layer your defences.
+Layer  1 (Model): Use Amazon Bedrock Guardrails to prevent the model from even suggesting harmful or sensitive outputs.
+Layer  2 (Infrastructure): Use strict Service Control Policies (SCPs) at the OU level for your AI accounts to prevent agents from spinning up unapproved resources (e.g., deny launching gpu instances outside of specific regions).
+Layer  3 (Cost): Implement aggressive AWS Budget Actions on the AI  Tooling account that can automatically throttle Lambda functions or revoke IAM role sessions if spending spikes unexpectedly due to an agent loop.
+  
+Some of the Anti-Patterns: The Main Things to Avoid
+
+When rushing to enable AI teams, I see landing zones compromised by these common mistakes. We don’t all have the luxury of green-field sites and will have to compromise.
+
+Avoid: The "God Mode" Agent Role
+
+The temptation is immense to give the agent role AdministratorAccess or overly broad s3:* permissions because figuring out the exact least privilege for an unpredictable LLM is difficult. Least privilege applies to people and agents alike. 
+
+The Reality: If an attacker prompt-injects your agent, they inherit those permissions. Never give an agent standing access to sensitive data. Always force it through a governed "tool layer" (like a Lambda) that enforces business logic and validates inputs before touching the data store.
+
+Avoid: Relying Solely on Prompt Engineering for Security
+
+"You are a helpful assistant who will not delete databases."
+
+Please don’t rely on system prompts as your primary security boundary. LLMs are probabilistic; they can be tricked, bypassed, or simply ignore instructions. Your security must be deterministic—IAM policies, network firewalls (Security Groups/NACLs), and SCPs that function regardless of what the prompt says.
+
+Avoid: Ignoring "Human-in-the-Loop" (HITL) Infrastructure
+
+Some actions are too sensitive for full autonomy (e.g., "Delete User," "Transfer Funds over £10k"). If your landing zone doesn't have a standardised mechanism for an agent to pause and ask for human approval, you aren't ready.
+
+The Reality: Architect your tooling layer using AWS Step Functions. Step Functions has native support for manual approval steps using SNS or EventBridge. The agent triggers the workflow, the workflow pauses and emails a human, and only proceeds once the human clicks "Approve."
+
+To summarise my thoughts: 
+
+Building an "Agentic AI Ready" environment is less about deploying new services and more about maturing your existing governance models. It requires shifting from protecting resources fromhumans, to enabling secure, observable patterns for machines acting on our behalf. As always, involve security early (Shift left thinking)
+
+Start by segregating your AI orchestration into dedicated accounts, lean into ABAC for dynamic permissions, and ensure your infrastructure guardrails are stronger than your prompt engineering.
+
+I hope this has been insightful and has given you something to think about. As Always reach out to me on my social accounts, LinkedIn etc.
+
+Dan Murphy
